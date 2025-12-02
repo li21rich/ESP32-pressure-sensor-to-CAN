@@ -1,5 +1,5 @@
 idf_component_register(
     SRCS "main.c" "adc_read.c" "can_send.c"
     INCLUDE_DIRS "."
-    REQUIRES esp_adc
+    REQUIRES driver freertos esp_adc
 )
