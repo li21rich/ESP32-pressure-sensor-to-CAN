@@ -32,18 +32,17 @@ void adc_init(void) {
 
     ESP_ERROR_CHECK(adc_continuous_config(adc_handle, &dig_cfg));
     ESP_ERROR_CHECK(adc_continuous_start(adc_handle));
-    pressureQueue = xQueueCreate(50, sizeof(uint16_t)); // Size needs adjusting
+    pressureQueue = xQueueCreate(10, sizeof(uint16_t));
 }
 
 void adc_task(void *pvParameters) {
     uint8_t result[256];
-    int counter = 0;
 
     while (true) {
         uint32_t bytes_read = 0;
         esp_err_t ret = adc_continuous_read(adc_handle, result, sizeof(result), &bytes_read, 1000);
 
-        if (ret == ESP_OK && bytes_read > 0) {
+        if (ret == ESP_OK && bytes_read > 0 && uxQueueSpacesAvailable(pressureQueue) > 0) {
             uint32_t sum = 0; 
             uint16_t last_val = 0;
             int count = 0;
@@ -56,13 +55,8 @@ void adc_task(void *pvParameters) {
             }
 
             uint16_t avg_val = sum / count;
-
-            if (++counter % 10 == 0) {
-                printf("[ADC Task] Avg=%u, Last=%u, Queue=%u\n", avg_val, last_val, (unsigned int)uxQueueMessagesWaiting(pressureQueue));
-            }
-
-            // Push averaged value into queue
-            xQueueSend(pressureQueue, &avg_val, portMAX_DELAY);
+            xQueueSend(pressureQueue, &avg_val, 0);
+            printf("[ADC Task] Avg=%u, Last=%u, Queue=%u\n", avg_val, last_val, (unsigned int)uxQueueMessagesWaiting(pressureQueue));
         }
 
         vTaskDelay(pdMS_TO_TICKS(10)); // Needs adjusting

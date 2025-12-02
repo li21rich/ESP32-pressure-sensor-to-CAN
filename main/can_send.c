@@ -36,15 +36,17 @@ void can_task(void *pvParameters) {
     uint16_t pressure_val;
 
     while (1) {
+        BaseType_t got = xQueueReceive(pressureQueue, &pressure_val, pdMS_TO_TICKS(500));
+
         printf("[CAN Task] Queue=%u, %s pressure=%u\n",
             (unsigned int)uxQueueMessagesWaiting(pressureQueue),
-            xQueueReceive(pressureQueue, &pressure_val, pdMS_TO_TICKS(500)) == pdTRUE ? "Sent" : "No new",
-            pressure_val
+            got == pdTRUE ? "Sent" : "No new",
+            got == pdTRUE ? pressure_val : 0
         );
-        if (xQueueReceive(pressureQueue, &pressure_val, portMAX_DELAY)) {
 
+        if (got == pdTRUE) {
             twai_message_t msg = {
-                .identifier = 0x100,     // Brake pressure CAN ID
+                .identifier = 0x100,
                 .data_length_code = 2,
                 .data = {
                     (uint8_t)(pressure_val & 0xFF),
@@ -52,8 +54,7 @@ void can_task(void *pvParameters) {
                 },
                 .flags = TWAI_MSG_FLAG_NONE
             };
-
-            twai_transmit(&msg, pdMS_TO_TICKS(50)); // Needs adjusting
+            twai_transmit(&msg, pdMS_TO_TICKS(10)); 
         }
     }
 }
