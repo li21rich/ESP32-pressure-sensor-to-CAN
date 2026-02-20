@@ -13,5 +13,6 @@
     "--query-driver=C:\\Users\\richa\\.espressif\\tools\\xtensa-esp-elf\\esp-14.2.0_20241119\\xtensa-esp-elf\\bin\\xtensa-esp32s3-elf-gcc.exe",
     "--compile-commands-dir=c:\\Users\\richa\\Code\\ESP32_PressureSensorBoard226\\build"
   ],
-  "idf.portWin": "COM3"
+  "idf.portWin": "COM3",
+  "idf.currentSetup": "C:\\Users\\richa\\esp\\v5.5.1\\esp-idf"
 }
