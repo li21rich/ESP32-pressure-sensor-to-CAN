@@ -1,4 +1,4 @@
 #pragma once
 
-void adc_init(void);
-void adc_task(void *pvParameters);
+void AdcInit(void);
+void AdcTask(void *pvParameters);
