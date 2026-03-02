@@ -1,22 +1,20 @@
-#include "adc_read.h"
-#include "esp_adc/adc_oneshot.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "esp_err.h"
 
-/*
- A B
- C D
-IC3:
- 14 19
- 6 4
-IC4:
- 8 10
- 16 15
-*/
+// ADC Drivers
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 
 #define NUM_SENSORS 8
 
+// --- Configuration ---
 typedef struct {
     adc_unit_t    unit;
     adc_channel_t channel;
@@ -24,148 +22,119 @@ typedef struct {
 } sensor_cfg_t;
 
 static const sensor_cfg_t sensors[NUM_SENSORS] = {
-    { ADC_UNIT_1, ADC_CHANNEL_5, "IC3_C(GPIO6)"  },
-    { ADC_UNIT_1, ADC_CHANNEL_3, "IC3_D(GPIO4)"  },
-    { ADC_UNIT_1, ADC_CHANNEL_7, "IC4_A(GPIO8)"  },
-    { ADC_UNIT_1, ADC_CHANNEL_9, "IC4_B(GPIO10)" },
-    { ADC_UNIT_2, ADC_CHANNEL_3, "IC3_A(GPIO14)" },
-    { ADC_UNIT_2, ADC_CHANNEL_8, "IC3_B(GPIO19)" },
-    { ADC_UNIT_2, ADC_CHANNEL_5, "IC4_C(GPIO16)" },
-    { ADC_UNIT_2, ADC_CHANNEL_4, "IC4_D(GPIO15)" },
+    /*
+     A B
+     C D
+    IC3:
+     14 19
+     6 4
+    IC4:
+     8 10
+     16 15
+    */
+    // --- IC 3 ---
+    { ADC_UNIT_2, ADC_CHANNEL_3, "IC3_A (GPIO14)" },
+    { ADC_UNIT_2, ADC_CHANNEL_8, "IC3_B (GPIO19)" },
+    { ADC_UNIT_1, ADC_CHANNEL_5, "IC3_C (GPIO6)"  },
+    { ADC_UNIT_1, ADC_CHANNEL_3, "IC3_D (GPIO4)"  },
+    // --- IC 4 ---
+    { ADC_UNIT_1, ADC_CHANNEL_7, "IC4_A (GPIO8)"  },
+    { ADC_UNIT_1, ADC_CHANNEL_9, "IC4_B (GPIO10)" },
+    { ADC_UNIT_2, ADC_CHANNEL_5, "IC4_C (GPIO16)" },
+    { ADC_UNIT_2, ADC_CHANNEL_4, "IC4_D (GPIO15)" },
 };
 
 static adc_oneshot_unit_handle_t adc1_handle = NULL;
 static adc_oneshot_unit_handle_t adc2_handle = NULL;
+static adc_cali_handle_t         adc1_cali   = NULL;
+static adc_cali_handle_t         adc2_cali   = NULL;
+
 QueueHandle_t pressureQueue = NULL;
+static bool calibration_init(adc_unit_t unit, adc_atten_t atten, adc_cali_handle_t *out_handle) 
+{
+    adc_cali_handle_t handle = NULL;
+    esp_err_t ret = ESP_FAIL;
+    bool calibrated = false;
 
-static float to_mv(int raw) {
-    return (raw / 4095.0f) * (1100.0f * 2.818f);
-}
-
-void adc_init(void) {
-    pressureQueue = xQueueCreate(8, sizeof(uint16_t));
-
-    // Init ADC1
-    adc_oneshot_unit_init_cfg_t adc1_cfg = { .unit_id = ADC_UNIT_1 };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&adc1_cfg, &adc1_handle));
-
-    // Init ADC2
-    adc_oneshot_unit_init_cfg_t adc2_cfg = { .unit_id = ADC_UNIT_2 };
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&adc2_cfg, &adc2_handle));
-
-    // Configure all 8 channels
-    adc_oneshot_chan_cfg_t chan_cfg = {
-        .atten    = ADC_ATTEN_DB_12,
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    adc_cali_curve_fitting_config_t cfg = {
+        .unit_id  = unit,
+        .atten    = atten,
         .bitwidth = ADC_BITWIDTH_12,
     };
+    ret = adc_cali_create_scheme_curve_fitting(&cfg, &handle);
+    if (ret == ESP_OK) calibrated = true;
+#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    adc_cali_line_fitting_config_t cfg = {
+        .unit_id  = unit,
+        .atten    = atten,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    ret = adc_cali_create_scheme_line_fitting(&cfg, &handle);
+    if (ret == ESP_OK) calibrated = true;
+#endif
+
+    *out_handle = handle;
+    return calibrated;
+}
+
+void adc_init(void) {
+    pressureQueue = xQueueCreate(8, sizeof(int));
+
+    // Init ADC Units
+    adc_oneshot_unit_init_cfg_t init_config1 = { .unit_id = ADC_UNIT_1 };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
+
+    adc_oneshot_unit_init_cfg_t init_config2 = { .unit_id = ADC_UNIT_2 };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config2, &adc2_handle));
+
+    // Config Channels
+    adc_oneshot_chan_cfg_t config = {
+        .bitwidth = ADC_BITWIDTH_12,
+        .atten    = ADC_ATTEN_DB_12,
+    };
+
     for (int i = 0; i < NUM_SENSORS; i++) {
         adc_oneshot_unit_handle_t h = (sensors[i].unit == ADC_UNIT_1) ? adc1_handle : adc2_handle;
-        ESP_ERROR_CHECK(adc_oneshot_config_channel(h, sensors[i].channel, &chan_cfg));
+        ESP_ERROR_CHECK(adc_oneshot_config_channel(h, sensors[i].channel, &config));
     }
+
+    // Init Calibration
+    calibration_init(ADC_UNIT_1, ADC_ATTEN_DB_12, &adc1_cali);
+    calibration_init(ADC_UNIT_2, ADC_ATTEN_DB_12, &adc2_cali);
 }
 
 void adc_task(void *pvParameters) {
+
     while (1) {
+        printf("\n--- Sensor Readings ---\n");
+        
         for (int i = 0; i < NUM_SENSORS; i++) {
             int raw = 0;
-            adc_oneshot_unit_handle_t h = (sensors[i].unit == ADC_UNIT_1) ? adc1_handle : adc2_handle;
-            ESP_ERROR_CHECK(adc_oneshot_read(h, sensors[i].channel, &raw));
-            printf("%s | raw: %d | %.1f mV\n", sensors[i].label, raw, to_mv(raw));
-        }
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-}
-// OLD VERSION (Ccontinuous mode not supported)
-/*#include "adc_read.h"
-#include "esp_adc/adc_continuous.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
-#include <string.h>
- A B
- C D
-IC3:
- 14 19
- 6 4
-IC4:
- 8 10
- 16 15
-static adc_continuous_handle_t adc_handle = NULL;
-QueueHandle_t pressureQueue = NULL; 
+            int voltage_mv = 0;
+            
+            // Select  handles
+            adc_oneshot_unit_handle_t unit_handle = (sensors[i].unit == ADC_UNIT_1) ? adc1_handle : adc2_handle;
+            adc_cali_handle_t cali_handle = (sensors[i].unit == ADC_UNIT_1) ? adc1_cali : adc2_cali;
 
-static const adc_digi_pattern_config_t patterns[8] = {
-    { .atten = ADC_ATTEN_DB_12, .unit = ADC_UNIT_1, .channel = ADC_CHANNEL_5, .bit_width = ADC_BITWIDTH_12 }, // GPIO6  IC3_C
-    { .atten = ADC_ATTEN_DB_12, .unit = ADC_UNIT_1, .channel = ADC_CHANNEL_3, .bit_width = ADC_BITWIDTH_12 }, // GPIO4  IC3_D
-    { .atten = ADC_ATTEN_DB_12, .unit = ADC_UNIT_1, .channel = ADC_CHANNEL_7, .bit_width = ADC_BITWIDTH_12 }, // GPIO8  IC4_A
-    { .atten = ADC_ATTEN_DB_12, .unit = ADC_UNIT_1, .channel = ADC_CHANNEL_9, .bit_width = ADC_BITWIDTH_12 }, // GPIO10 IC4_B
-    { .atten = ADC_ATTEN_DB_12, .unit = ADC_UNIT_2, .channel = ADC_CHANNEL_3, .bit_width = ADC_BITWIDTH_12 }, // GPIO14 IC3_A
-    { .atten = ADC_ATTEN_DB_12, .unit = ADC_UNIT_2, .channel = ADC_CHANNEL_8, .bit_width = ADC_BITWIDTH_12 }, // GPIO19 IC3_B
-    { .atten = ADC_ATTEN_DB_12, .unit = ADC_UNIT_2, .channel = ADC_CHANNEL_5, .bit_width = ADC_BITWIDTH_12 }, // GPIO16 IC4_C
-    { .atten = ADC_ATTEN_DB_12, .unit = ADC_UNIT_2, .channel = ADC_CHANNEL_4, .bit_width = ADC_BITWIDTH_12 }, // GPIO15 IC4_D
-};
-static const char* labels[8] = {
-    "IC3_C(GPIO6)",  "IC3_D(GPIO4)",  "IC4_A(GPIO8)",  "IC4_B(GPIO10)",
-    "IC3_A(GPIO14)", "IC3_B(GPIO19)", "IC4_C(GPIO16)", "IC4_D(GPIO15)",
-};
-static float to_mv(uint16_t raw) {
-    return (raw / 4095.0f) * (1100.0f * 2.818f);
-}
-void adc_init(void) {
-    pressureQueue = xQueueCreate(8, sizeof(uint16_t));
+            // Read
+            if (adc_oneshot_read(unit_handle, sensors[i].channel, &raw) == ESP_OK) {
+                
+                // Convert to Voltage
+                if (cali_handle) {
+                    ESP_ERROR_CHECK(adc_cali_raw_to_voltage(cali_handle, raw, &voltage_mv));
+                    
+                    // Print Result
+                    printf("%s | %4d mV\n", sensors[i].label, voltage_mv);
 
-    adc_continuous_handle_cfg_t handle_cfg = {
-        .max_store_buf_size = 1024,
-        .conv_frame_size = 256,
-    };
-    ESP_ERROR_CHECK(adc_continuous_new_handle(&handle_cfg, &adc_handle));
-
-    adc_continuous_config_t dig_cfg = {
-        .sample_freq_hz = 2000,
-        .conv_mode      = ADC_CONV_ALTER_UNIT,       // ADC1 and ADC2 alternating
-        .format         = ADC_DIGI_OUTPUT_FORMAT_TYPE2,
-        .pattern_num    = 8,
-        .adc_pattern    = (adc_digi_pattern_config_t*)patterns,
-    };
-
-    ESP_ERROR_CHECK(adc_continuous_config(adc_handle, &dig_cfg));
-    ESP_ERROR_CHECK(adc_continuous_start(adc_handle));
-}
-
-void adc_task(void *pvParameters) {
-    uint8_t result[512] = {0};  
-    uint32_t ret_num = 0;
-
-    uint32_t sum[2][10] = {0};  // [unit][channel]
-    int      count[2][10] = {0};
-
-    while (1) {
-        esp_err_t ret = adc_continuous_read(adc_handle, result, sizeof(result), &ret_num, 0);
-
-        if (ret == ESP_OK && ret_num > 0) {
-            memset(sum, 0, sizeof(sum));
-            memset(count, 0, sizeof(count));
-
-            for (int i = 0; i < ret_num; i += sizeof(adc_digi_output_data_t)) {
-                adc_digi_output_data_t *out = (adc_digi_output_data_t*)&result[i];
-                uint8_t unit = out->type2.unit;  // 0=ADC1, 1=ADC2
-                uint8_t ch   = out->type2.channel;
-                if (unit < 2 && ch < 10) {
-                    sum[unit][ch]   += out->type2.data;
-                    count[unit][ch]++;
-                }
-            }
-            // Print the 8 channels
-            for (int i = 0; i < 8; i++) {
-                uint8_t unit = patterns[i].unit - 1;  // ADC_UNIT_1=1 is index 0
-                uint8_t ch   = patterns[i].channel;
-                if (count[unit][ch] > 0) {
-                    uint16_t avg = sum[unit][ch] / count[unit][ch];
-                    printf("%s | raw: %u | %.1f mV\n", labels[i], avg, to_mv(avg));
+                    // Send to Queue (commented)
+                    // xQueueSend(pressureQueue, &voltage_mv, 0);
+                } else {
+                    printf("%s | Raw: %d (No Calib)\n", sensors[i].label, raw);
                 }
             }
         }
-
-        vTaskDelay(pdMS_TO_TICKS(10));
+        
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
-*/
