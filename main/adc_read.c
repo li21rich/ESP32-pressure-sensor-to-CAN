@@ -30,26 +30,29 @@ static const sensor_cfg_t sensors[NUM_SENSORS] = {
     /*
     A B
     C D
-
+    IO pin layouts
     IC3:
-     14 19
+     9 11
      6 4
-    
     IC4:
-     8 10
-     16 15
+     15 17
+     8 3
     */
-    // --- IC 3 ---
-    { ADC_UNIT_1, ADC_CHANNEL_5, "IC3_C (GPIO6)"  },
-    { ADC_UNIT_1, ADC_CHANNEL_3, "IC3_D (GPIO4)"  },
-    // --- IC 4 ---
-    { ADC_UNIT_1, ADC_CHANNEL_7, "IC4_A (GPIO8)"  },
-    { ADC_UNIT_1, ADC_CHANNEL_9, "IC4_B (GPIO10)" },
-    // --- Along with not supporting continuous read, ADC2 pins are riddled with hardware conflicts. Blame the PCB:
-    { ADC_UNIT_2, ADC_CHANNEL_4, "IC4_D (GPIO15)" }, // perfectly safe
-    //{ ADC_UNIT_2, ADC_CHANNEL_3, "IC3_A(GPIO14)" }, //ehhh
-    //{ ADC_UNIT_2, ADC_CHANNEL_5, "IC4_C(GPIO16)" },// ehhh 
-    //{ ADC_UNIT_2, ADC_CHANNEL_8, "IC3_B(GPIO19)" }, // problematic pin, fails if any printf statements used. internally hard-wired to USB-Serial/JTAG controller
+    // IC 3 
+    { ADC_UNIT_1, ADC_CHANNEL_8, "IC3_A (GPIO9)"  }, // A
+    { ADC_UNIT_2, ADC_CHANNEL_1, "IC3_B (GPIO11)"  }, // B
+    { ADC_UNIT_1, ADC_CHANNEL_5, "IC3_C (GPIO6)"  }, // C
+    { ADC_UNIT_1, ADC_CHANNEL_3, "IC3_D (GPIO4)"  }, // D
+    // IC 4
+    { ADC_UNIT_2, ADC_CHANNEL_4, "IC4_A (GPIO15)"  }, // A
+    { ADC_UNIT_2, ADC_CHANNEL_6, "IC4_B (GPIO17)"  }, // B
+    { ADC_UNIT_1, ADC_CHANNEL_7, "IC4_C (GPIO8)"  }, // C
+    { ADC_UNIT_1, ADC_CHANNEL_2, "IC4_D (GPIO3)"  }, // D
+
+    // prevoiusly was ADC 1: 4 6 8 10 safe,
+    // ADC 2: 15 safe
+    // ADC 2: 14 16 19 bad (19 worst) due to hardware conflicts
+    // pins were translated wrong and chosen wrong.
 };
 
 static adc_oneshot_unit_handle_t adc1_handle = NULL;
