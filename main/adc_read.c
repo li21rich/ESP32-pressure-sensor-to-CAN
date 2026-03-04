@@ -17,8 +17,7 @@
 #define ADC_MAX_RAW       4095.0f
 #define ADC_MAX_VOLTAGE_MV 3100.0f
 
-// Reduced to the 5 working pins. Other 3 (ADC2 GPIOs 14, 16, 19) removed due to conflicts (JTAG/Strap/WiFi).
-#define NUM_SENSORS 5
+#define NUM_SENSORS 8
 
 typedef struct {
     adc_unit_t    unit;
